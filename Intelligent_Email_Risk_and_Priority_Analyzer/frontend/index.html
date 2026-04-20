@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Email Risk Analyzer</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #112031;
+      --muted: #5b6b7a;
+      --primary: #0d6efd;
+      --border: #dbe4ee;
+      --low: #198754;
+      --medium: #fd7e14;
+      --high: #dc3545;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      color: var(--text);
+      background: linear-gradient(135deg, #eef5ff 0%, #f9fcff 60%, #eef7f3 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 900px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 8px 22px rgba(17, 32, 49, 0.08);
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--muted);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 180px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 0.98rem;
+      resize: vertical;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15);
+    }
+
+    button {
+      margin-top: 12px;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      background: #fbfdff;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 4px;
+    }
+
+    .value {
+      font-size: 1.2rem;
+      font-weight: 600;
+    }
+
+    .risk-low {
+      color: var(--low);
+    }
+
+    .risk-medium {
+      color: var(--medium);
+    }
+
+    .risk-high {
+      color: var(--high);
+    }
+
+    ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .error {
+      color: var(--high);
+      margin-top: 10px;
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 700px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Phishing Email Analyzer</h1>
+      <p>Paste email content and run risk analysis.</p>
+      <textarea id="emailInput" placeholder="Paste email text here..."></textarea>
+      <button id="analyzeBtn">Analyze</button>
+      <div id="error" class="error hidden"></div>
+    </div>
+
+    <div id="results" class="card hidden">
+      <div class="grid">
+        <div class="metric">
+          <div class="label">Risk Score</div>
+          <div id="riskScore" class="value">-</div>
+        </div>
+        <div class="metric">
+          <div class="label">Risk Level</div>
+          <div id="riskLevel" class="value">-</div>
+        </div>
+      </div>
+
+      <div class="metric" style="margin-top: 12px;">
+        <div class="label">Summary</div>
+        <div id="summaryText" class="value" style="font-size: 1rem; font-weight: 500; white-space: pre-line;">-</div>
+      </div>
+
+      <div class="metric" style="margin-top: 12px;">
+        <div class="label">Reasons</div>
+        <ul id="reasonsList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE_URL = "http://127.0.0.1:8000";
+    const analyzeBtn = document.getElementById("analyzeBtn");
+    const emailInput = document.getElementById("emailInput");
+    const results = document.getElementById("results");
+    const errorBox = document.getElementById("error");
+    const riskScoreEl = document.getElementById("riskScore");
+    const riskLevelEl = document.getElementById("riskLevel");
+    const summaryTextEl = document.getElementById("summaryText");
+    const reasonsListEl = document.getElementById("reasonsList");
+
+    function simpleExtractiveSummary(text, maxLines = 3) {
+      const cleaned = (text || "").trim();
+      if (!cleaned) return "";
+
+      const sentences = cleaned
+        .split(/(?<=[.!?])\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      if (sentences.length <= maxLines) {
+        return sentences.join("\n");
+      }
+
+      // Simple heuristic: prioritize longer, information-rich sentences.
+      const ranked = sentences
+        .map((sentence, index) => ({
+          sentence,
+          index,
+          score: sentence.split(/\s+/).length
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxLines)
+        .sort((a, b) => a.index - b.index);
+
+      return ranked.map((item) => item.sentence).join("\n");
+    }
+
+    function applyRiskLevelStyle(level) {
+      riskLevelEl.classList.remove("risk-low", "risk-medium", "risk-high");
+      if (level === "Low") riskLevelEl.classList.add("risk-low");
+      if (level === "Medium") riskLevelEl.classList.add("risk-medium");
+      if (level === "High") riskLevelEl.classList.add("risk-high");
+    }
+
+    async function analyzeEmail() {
+      const email = emailInput.value.trim();
+      errorBox.classList.add("hidden");
+      errorBox.textContent = "";
+
+      if (!email) {
+        errorBox.textContent = "Please enter email text.";
+        errorBox.classList.remove("hidden");
+        return;
+      }
+
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = "Analyzing...";
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/analyze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.detail || "Failed to analyze email.");
+        }
+
+        const data = await response.json();
+
+        riskScoreEl.textContent = `${Number(data.risk_score).toFixed(2)} / 100`;
+        riskLevelEl.textContent = data.risk_level || "-";
+        applyRiskLevelStyle(data.risk_level);
+
+        const summary = simpleExtractiveSummary(email, 3);
+        summaryTextEl.textContent = summary || "-";
+
+        reasonsListEl.innerHTML = "";
+        const reasons = Array.isArray(data.reasons) ? data.reasons : [];
+        if (!reasons.length) {
+          const li = document.createElement("li");
+          li.textContent = "No reasons returned by backend.";
+          reasonsListEl.appendChild(li);
+        } else {
+          reasons.forEach((reason) => {
+            const li = document.createElement("li");
+            li.textContent = reason;
+            reasonsListEl.appendChild(li);
+          });
+        }
+
+        results.classList.remove("hidden");
+      } catch (error) {
+        errorBox.textContent = error.message || "Unexpected error occurred.";
+        errorBox.classList.remove("hidden");
+      } finally {
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = "Analyze";
+      }
+    }
+
+    analyzeBtn.addEventListener("click", analyzeEmail);
+  </script>
+</body>
+</html>
